@@ -28,38 +28,106 @@ func NewDecoder(data []byte) *Decoder {
 	}
 }
 
-func (s *Decoder) NextToken() ([]byte, error) {
-	s.move(s.pos)
-	if s.eof() {
-		if s.stack != 0 {
+/*
+func (d *Decoder) Decode(v interface{}) error {
+	rv := reflect.ValueOf(v)
+	switch {
+	case rv.Kind() != reflect.Ptr:
+		return fmt.Errorf("non-pointer %v", reflect.TypeOf(v))
+	case rv.IsNil():
+		return fmt.Errorf("nil pointer")
+	default:
+		return d.decode(rv.Elem())
+	}
+}
+
+func (d *Decoder) decode(v reflect.Value) error {
+	tok, err := d.NextToken()
+	if err != nil {
+		return err
+	}
+	switch tok[0] {
+	case '{':
+		switch v.Kind() {
+		case reflect.Map:
+			m, err := d.decodeMap()
+			if err != nil {
+				return err
+			}
+			v.Set(reflect.ValueOf(m))
+		}
+	}
+	return nil
+}
+
+func (d *Decoder) decodeMap() (map[string]interface{}, error) {
+	m := make(map[string]interface{})
+	for {
+		tok, err := d.NextToken()
+		if err != nil {
+			return nil, err
+		}
+		if tok[0] == '}' {
+			return m, nil
+		}
+
+		key := string(tok)
+		val, err := d.decodeValue()
+		if err != nil {
+			return nil, err
+		}
+		m[key] = val
+	}
+}
+
+func (d *Decoder) decodeValue() (interface{}, error) {
+	tok, err := d.NextToken()
+	if err != nil {
+		return nil, err
+	}
+	switch tok[0] {
+	case '{':
+		return d.decodeMap()
+	case ':':
+		return d.decodeMap()
+	default:
+		return string(tok), nil
+	}
+}
+*/
+
+func (d *Decoder) NextToken() ([]byte, error) {
+	d.move(d.pos)
+	if d.eof() {
+		if d.stack != 0 {
 			return nil, io.ErrUnexpectedEOF
 		}
 		return nil, io.EOF
 	}
-	tok := s.readToken()
+	tok := d.readToken()
 	if len(tok) < 1 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	return s.step(s, tok)
+	return d.step(d, tok)
 }
 
-func (s *Decoder) remaining() []byte {
-	if s.offset >= len(s.data) {
+func (d *Decoder) remaining() []byte {
+	if d.offset >= len(d.data) {
 		return nil
 	}
-	return s.data[s.offset:]
+	return d.data[d.offset:]
 }
 
-func (s *Decoder) move(n int) {
-	s.offset += n
+func (d *Decoder) move(n int) {
+	d.offset += n
 }
 
-func (s *Decoder) eof() bool {
-	return len(s.data[s.offset:]) == 0
+func (d *Decoder) eof() bool {
+	return len(d.data[d.offset:]) == 0
 }
 
-func (s *Decoder) readToken() []byte {
-	data := s.remaining()
+func (d *Decoder) readToken() []byte {
+	data := d.remaining()
 	for pos, c := range data {
 		// ignore past whitespaces
 		if isWhitespace(c) {
@@ -68,19 +136,19 @@ func (s *Decoder) readToken() []byte {
 
 		switch c {
 		case '{', '}', ':':
-			s.pos = pos + 1
-			return data[pos:s.pos]
+			d.pos = pos + 1
+			return data[pos:d.pos]
 		}
 
-		s.pos = s.scanIdent()
-		return data[:s.pos]
+		d.pos = d.scanIdent()
+		return data[:d.pos]
 	}
 	return nil
 }
 
-func (s *Decoder) scanIdent() int {
+func (d *Decoder) scanIdent() int {
 	pos := 0
-	for _, c := range s.remaining() {
+	for _, c := range d.remaining() {
 		if !isIdent(c) {
 			break
 		}
@@ -89,13 +157,13 @@ func (s *Decoder) scanIdent() int {
 	return pos
 }
 
-func (s *Decoder) pushStack() {
-	s.stack++
+func (d *Decoder) pushStack() {
+	d.stack++
 }
 
-func (s *Decoder) popStack() int {
-	s.stack--
-	return s.stack
+func (d *Decoder) popStack() int {
+	d.stack--
+	return d.stack
 }
 
 func isIdent(c byte) bool {
@@ -130,6 +198,9 @@ func stateInsideBlock(s *Decoder, tok []byte) ([]byte, error) {
 		// 4: text block (body)
 		// 5: trailer block
 		s.step = stateBlockDelim
+	case '}':
+		s.popStack()
+		s.step = stateBeginBlock
 	default:
 		return nil, fmt.Errorf("stateInsideBlock: unknown block identifier %s", tok)
 	}
@@ -154,10 +225,11 @@ func stateBlockDelim(s *Decoder, tok []byte) ([]byte, error) {
 func stateBlockValue(s *Decoder, tok []byte) ([]byte, error) {
 	switch tok[0] {
 	case '{':
-		s.step = stateBlockTagKey
+		s.step = stateBlockTag
 		s.pushStack()
 	case ':':
-		s.step = stateBlockFieldKey
+		s.step = stateBlockTag
+		s.isField = true
 	case '}':
 		if s.popStack() > 0 {
 			s.step = stateBlockValue
@@ -170,22 +242,16 @@ func stateBlockValue(s *Decoder, tok []byte) ([]byte, error) {
 	return tok, nil
 }
 
-func stateBlockTagKey(s *Decoder, tok []byte) ([]byte, error) {
+func stateBlockTag(s *Decoder, tok []byte) ([]byte, error) {
 	switch tok[0] {
 	case '}':
 		if s.popStack() > 0 {
-			return nil, fmt.Errorf("stateBlockTagKey: malformed state")
+			return nil, fmt.Errorf("stateBlockTag: malformed state")
 		}
 		s.step = stateBlockValue
 	default:
 		s.step = stateBlockDelim
 	}
-	return tok, nil
-}
-
-func stateBlockFieldKey(s *Decoder, tok []byte) ([]byte, error) {
-	s.step = stateBlockDelim
-	s.isField = true
 	return tok, nil
 }
 

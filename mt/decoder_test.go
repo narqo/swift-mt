@@ -19,7 +19,7 @@ FINANCIAL INSTRUMENT ACME
 
 var mtData = bytes.ReplaceAll([]byte(testData), []byte("\n"), []byte("\r\n"))
 
-func TestDecoder(t *testing.T) {
+func TestDecoder_NextToken(t *testing.T) {
 	dec := mt.NewDecoder(mtData)
 	for {
 		token, err := dec.NextToken()
@@ -32,3 +32,12 @@ func TestDecoder(t *testing.T) {
 		t.Logf("token %s\n", token)
 	}
 }
+
+//func TestDecoder_Decode(t *testing.T) {
+//	m := make(map[string]interface{})
+//	err := mt.NewDecoder(mtData).Decode(&m)
+//	if err != nil {
+//		t.Fatal(err)
+//	}
+//	t.Logf("decode %v\n", m)
+//}
